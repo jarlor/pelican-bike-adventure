@@ -47,6 +47,13 @@
               <p class="overlay-kicker" id="overlay-kicker">THE COAST IS CALLING</p>
               <h2 id="overlay-title">海风正好，<br>出发吧。</h2>
               <p id="overlay-description">一只鹈鹕，一辆单车，一路好风景。</p>
+              <div id="results" class="results" role="status" aria-live="polite" aria-atomic="true" hidden>
+                <dl class="result-scores">
+                  <div><dt>本次得分</dt><dd id="score">0</dd></div>
+                  <div><dt>历史最高分</dt><dd id="best-score">0</dd></div>
+                </dl>
+                <p class="storage-note" id="storage-note" hidden></p>
+              </div>
               <button id="action-button" type="button">开始骑行 <span aria-hidden="true">↗</span></button>
               <span class="start-hint" id="start-hint">也可以按空格开始并跳跃</span>
             </div>

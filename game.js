@@ -14,6 +14,10 @@
   const distance = document.getElementById('distance');
   const cleared = document.getElementById('cleared');
   const status = document.getElementById('game-status');
+  const results = document.getElementById('results');
+  const score = document.getElementById('score');
+  const best = document.getElementById('best-score');
+  const storageNote = document.getElementById('storage-note');
 
   if (!ctx) {
     title.textContent = '暂时无法绘制游戏';
@@ -29,6 +33,33 @@
   const ground = Game.WORLD.ground;
   let previousTime = null;
   let displayedStatus = null;
+
+  // Keep the record outside state: starting a new ride resets all game state.
+  const bestScoreKey = 'pelican-bike-adventure.bestScore';
+  let bestScore = 0;
+  let storage;
+  let storageAvailable = true;
+  try {
+    storage = window.localStorage;
+    const saved = storage.getItem(bestScoreKey);
+    if (saved !== null && /^\d+$/.test(saved)) {
+      const value = Number(saved);
+      if (Number.isSafeInteger(value) && value >= 0) bestScore = value;
+    }
+  } catch {
+    storageAvailable = false;
+  }
+
+  function recordScore() {
+    if (state.cleared <= bestScore) return;
+    bestScore = state.cleared;
+    if (!storageAvailable) return;
+    try {
+      storage.setItem(bestScoreKey, String(bestScore));
+    } catch {
+      storageAvailable = false;
+    }
+  }
 
   function ellipse(x, y, rx, ry, color, rotation = 0) {
     ctx.beginPath();
@@ -314,10 +345,17 @@
     if (displayedStatus === state.status) return;
     displayedStatus = state.status;
     overlay.hidden = state.status === 'running';
+    stage.setAttribute('data-status', state.status);
+    results.hidden = state.status !== 'over';
     if (state.status === 'running') {
       stage.setAttribute('aria-label', '骑行中，按空格跳过障碍，落地后可再次起跳');
       status.textContent = '骑行中 · 看准障碍，轻按空格';
     } else if (state.status === 'over') {
+      recordScore();
+      score.textContent = String(state.cleared);
+      best.textContent = String(bestScore);
+      storageNote.hidden = storageAvailable;
+      storageNote.textContent = storageAvailable ? '' : '纪录无法保存，最高分仅在当前页面有效。';
       kicker.textContent = 'EVERY RIDE IS A GOOD RIDE';
       title.textContent = '休整一下，再出发。';
       description.textContent = `本次骑行 ${Math.floor(state.distance / 10)} 米，越过 ${state.cleared} 个障碍。下一次，试着提前一点起跳。`;

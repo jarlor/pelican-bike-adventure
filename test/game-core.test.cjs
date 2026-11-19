@@ -105,6 +105,27 @@ for (const kind of ['cone', 'crate']) {
     advance(state, 0.5);
     assert.equal(state.cleared, 1);
   });
+
+  test(`${kind}: a later collision preserves earned points until a new ride`, () => {
+    const state = running();
+    state.obstacles = [
+      { id: 1, x: state.player.x + 150, width: 46, height: 55, kind, passed: false },
+      { id: 2, x: state.player.x + 550, width: 46, height: 55, kind, passed: false }
+    ];
+    Game.jump(state);
+    advance(state, 0.9);
+    assert.equal(state.cleared, 1);
+    assert.equal(state.obstacles[0].passed, true);
+    advance(state, 0.8);
+    assert.equal(state.status, 'over');
+    assert.equal(state.cleared, 1);
+    assert.equal(state.obstacles.find(obstacle => obstacle.id === 2).passed, false);
+    const snapshot = JSON.stringify(state);
+    advance(state, 2);
+    assert.equal(JSON.stringify(state), snapshot);
+    Game.startGame(state);
+    assert.equal(state.cleared, 0);
+  });
 }
 
 test('collision checks at a low frame rate cannot tunnel through a nearby obstacle', () => {

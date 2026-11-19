@@ -6,10 +6,27 @@ const vm = require('node:vm');
 
 const repository = path.resolve(__dirname, '..');
 const html = fs.readFileSync(path.join(repository, 'index.html'), 'utf8');
+const bestScoreKey = 'pelican-bike-adventure.bestScore';
+
+function createStorage(initialValue = null, { readError = false, writeError = false } = {}) {
+  const values = new Map(initialValue === null ? [] : [[bestScoreKey, initialValue]]);
+  return {
+    values, writes: [],
+    getItem(key) {
+      if (readError) throw new Error('Storage access denied');
+      return values.has(key) ? values.get(key) : null;
+    },
+    setItem(key, value) {
+      this.writes.push([key, value]);
+      if (writeError) throw new Error('Storage quota exceeded');
+      values.set(key, String(value));
+    }
+  };
+}
 
 // This harness executes the actual browser scripts and their event listeners.
 // It checks DOM/input wiring; the canvas adapter does not verify rendered pixels.
-function loadPage({ canvasSupported = true } = {}) {
+function loadPage({ canvasSupported = true, storage = createStorage(), storageAccessError = false } = {}) {
   const windowEvents = new Map();
   const documentEvents = new Map();
   const frames = [];
@@ -27,9 +44,9 @@ function loadPage({ canvasSupported = true } = {}) {
   }
   context.createLinearGradient = () => ({ addColorStop() {} });
 
-  for (const [, id] of html.matchAll(/\bid="([^"]+)"/g)) {
+  for (const [tag, id] of html.matchAll(/<[^>]*\bid="([^"]+)"[^>]*>/g)) {
     elements.set(id, {
-      id, textContent: '', hidden: false, attributes: {}, events: new Map(),
+      id, textContent: '', hidden: /\shidden(?:\s|>)/.test(tag), attributes: {}, events: new Map(),
       addEventListener(name, handler) { this.events.set(name, handler); },
       setAttribute(name, value) { this.attributes[name] = value; },
       focus() { document.activeElement = this; }
@@ -49,9 +66,16 @@ function loadPage({ canvasSupported = true } = {}) {
   };
   const sandbox = {
     document,
+    Math: Object.assign(Object.create(Math), { random: () => 0.5 }),
     addEventListener(name, handler) { windowEvents.set(name, handler); },
     requestAnimationFrame(handler) { frames.push(handler); }
   };
+  Object.defineProperty(sandbox, 'localStorage', {
+    get() {
+      if (storageAccessError) throw new Error('Storage property access denied');
+      return storage;
+    }
+  });
   sandbox.window = sandbox;
   vm.createContext(sandbox);
   for (const [, script] of html.matchAll(/<script src="([^"]+)" defer><\/script>/g)) {
@@ -81,6 +105,33 @@ function loadPage({ canvasSupported = true } = {}) {
 
 function key(overrides = {}) {
   return { code: 'Space', repeat: false, target: { tagName: 'BODY' }, preventDefault() {}, ...overrides };
+}
+
+// With a fixed random sequence, these distances time genuine space-bar jumps
+// over the first two obstacles; no game state or collision code is replaced.
+function finishRide(page, cleared = 0) {
+  const jumpDistances = [67, 140];
+  assert.ok(cleared <= jumpDistances.length);
+  let jumps = Number(page.elements.get('cleared').textContent);
+  for (let frame = 0; frame < 600; frame++) {
+    if (/碰到障碍/.test(page.elements.get('game-status').textContent)) {
+      assert.equal(Number(page.elements.get('cleared').textContent), cleared);
+      return;
+    }
+    if (jumps < cleared && Number(page.elements.get('distance').textContent) >= jumpDistances[jumps]) {
+      page.emit('keydown', key());
+      page.emit('keyup', key());
+      jumps++;
+    }
+    page.step(1);
+  }
+  assert.fail('The ride should end at the next obstacle');
+}
+
+function assertResults(page, score, best) {
+  assert.equal(page.elements.get('results').hidden, false);
+  assert.equal(page.elements.get('score').textContent, String(score));
+  assert.equal(page.elements.get('best-score').textContent, String(best));
 }
 
 test('the offline entry point loads local styles and the browser scripts in order', () => {
@@ -154,8 +205,169 @@ test('form controls keep their normal space behavior', () => {
 });
 
 test('unsupported Canvas gives an explanation instead of a broken start button', () => {
-  const page = loadPage({ canvasSupported: false });
+  const page = loadPage({ canvasSupported: false, storageAccessError: true });
   assert.match(page.elements.get('overlay-description').textContent, /Canvas/);
   assert.equal(page.elements.get('action-button').hidden, true);
+  assert.equal(page.elements.get('results').hidden, true);
   assert.equal(page.pendingFrames, 0);
+});
+
+test('the first zero-point collision shows both scores without writing a record', () => {
+  const storage = createStorage();
+  const page = loadPage({ storage });
+  assert.equal(page.elements.get('results').hidden, true);
+  page.click();
+  assert.equal(page.elements.get('results').hidden, true);
+  finishRide(page);
+  assertResults(page, 0, 0);
+  assert.equal(page.elements.get('storage-note').hidden, true);
+  assert.equal(storage.writes.length, 0);
+  assert.match(html, /<dt>本次得分<\/dt>/);
+  assert.match(html, /<dt>历史最高分<\/dt>/);
+});
+
+test('earned points are saved once on collision and remain frozen on later frames', () => {
+  const storage = createStorage();
+  const page = loadPage({ storage });
+  page.click();
+  // Clear the first obstacle, then pause before encountering the second.
+  for (let frame = 0; frame < 180 && Number(page.elements.get('distance').textContent) < 67; frame++) {
+    page.step(1);
+  }
+  assert.ok(Number(page.elements.get('distance').textContent) >= 67);
+  page.emit('keydown', key());
+  page.emit('keyup', key());
+  page.step(70);
+  assert.equal(page.elements.get('cleared').textContent, '01');
+  assert.equal(storage.writes.length, 0, 'Points are settled only at game over');
+  page.visibility(true);
+  page.step(120);
+  assert.equal(page.elements.get('results').hidden, true);
+  assert.equal(page.elements.get('cleared').textContent, '01');
+  assert.equal(storage.writes.length, 0);
+  page.visibility(false);
+  page.emit('keydown', key());
+  page.emit('keyup', key());
+  finishRide(page, 1);
+  assertResults(page, 1, 1);
+  assert.deepEqual(storage.writes, [[bestScoreKey, '1']]);
+  page.step(120);
+  page.emit('blur');
+  page.emit('keydown', key({ repeat: true }));
+  assertResults(page, 1, 1);
+  assert.equal(storage.writes.length, 1);
+});
+
+test('button and space restarts reset the ride while lower and tied scores keep the record', () => {
+  const storage = createStorage();
+  const page = loadPage({ storage });
+  let best = 0;
+  let expectedWrites = 0;
+  for (const [index, points] of [1, 0, 1, 2].entries()) {
+    if (index % 2 === 0) page.click();
+    else {
+      page.emit('keydown', key());
+      page.emit('keyup', key());
+    }
+    assert.equal(page.elements.get('results').hidden, true);
+    assert.equal(page.elements.get('cleared').textContent, '00');
+    finishRide(page, points);
+    if (points > best) {
+      best = points;
+      expectedWrites++;
+    }
+    assertResults(page, points, best);
+    assert.equal(storage.values.get(bestScoreKey), String(best));
+    assert.equal(storage.writes.length, expectedWrites);
+  }
+});
+
+test('a new page reads the previous page record and can replace it only with a higher score', () => {
+  const storage = createStorage();
+  const first = loadPage({ storage });
+  first.click();
+  finishRide(first, 1);
+  assertResults(first, 1, 1);
+  const reloaded = loadPage({ storage });
+  reloaded.click();
+  finishRide(reloaded);
+  assertResults(reloaded, 0, 1);
+  assert.equal(storage.writes.length, 1);
+  reloaded.click();
+  finishRide(reloaded, 2);
+  assertResults(reloaded, 2, 2);
+  assert.deepEqual(storage.writes, [[bestScoreKey, '1'], [bestScoreKey, '2']]);
+});
+
+for (const saved of ['0', '12', String(Number.MAX_SAFE_INTEGER)]) {
+  test(`a saved nonnegative safe integer (${saved}) is shown without truncation`, () => {
+    const storage = createStorage(saved);
+    const page = loadPage({ storage });
+    page.click();
+    finishRide(page);
+    assertResults(page, 0, saved);
+    assert.equal(storage.writes.length, 0);
+    assert.equal(page.elements.get('storage-note').hidden, true);
+  });
+}
+
+for (const saved of ['', '   ', '-1', '1.5', 'NaN', 'Infinity', 'hello', '12oops', '1e2',
+  '9007199254740992', '9'.repeat(400)]) {
+  test(`invalid saved record (${saved.slice(0, 20) || 'empty'}) starts at zero and can be replaced`, () => {
+    const storage = createStorage(saved);
+    const page = loadPage({ storage });
+    page.click();
+    finishRide(page);
+    assertResults(page, 0, 0);
+    assert.equal(storage.writes.length, 0);
+    page.click();
+    finishRide(page, 1);
+    assertResults(page, 1, 1);
+    assert.equal(storage.values.get(bestScoreKey), '1');
+    assert.equal(page.elements.get('storage-note').hidden, true);
+  });
+}
+
+for (const failure of ['property', 'read', 'write', 'missing']) {
+  test(`storage ${failure} failure keeps the game and session record usable`, () => {
+    const storage = createStorage(null, {
+      readError: failure === 'read', writeError: failure === 'write'
+    });
+    const page = loadPage({
+      storage: failure === 'missing' ? null : storage,
+      storageAccessError: failure === 'property'
+    });
+    page.click();
+    finishRide(page, 1);
+    assertResults(page, 1, 1);
+    assert.equal(page.elements.get('storage-note').hidden, false);
+    assert.match(page.elements.get('storage-note').textContent, /纪录无法保存.*当前页面/);
+    page.click();
+    assert.equal(page.elements.get('results').hidden, true);
+    finishRide(page);
+    assertResults(page, 0, 1);
+    page.click();
+    finishRide(page, 2);
+    assertResults(page, 2, 2);
+    assert.equal(page.elements.get('storage-note').hidden, false);
+    assert.equal(storage.values.has(bestScoreKey), false);
+    assert.equal(storage.writes.length, failure === 'write' ? 1 : 0);
+  });
+}
+
+test('a write failure preserves an existing persisted record and a higher session record', () => {
+  const storage = createStorage('1', { writeError: true });
+  const page = loadPage({ storage });
+  page.click();
+  finishRide(page, 2);
+  assertResults(page, 2, 2);
+  assert.equal(page.elements.get('storage-note').hidden, false);
+  assert.equal(storage.values.get(bestScoreKey), '1');
+  page.click();
+  finishRide(page);
+  assertResults(page, 0, 2);
+  const reloaded = loadPage({ storage });
+  reloaded.click();
+  finishRide(reloaded);
+  assertResults(reloaded, 0, 1);
 });
