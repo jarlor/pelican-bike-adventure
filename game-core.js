@@ -4,6 +4,27 @@
 
   const WORLD = Object.freeze({ width: 1200, height: 540, ground: 424 });
   const PHYSICS = Object.freeze({ gravity: 1800, jumpSpeed: 810, baseSpeed: 320, maxSpeed: 410 });
+  const SETTLEMENT = Object.freeze({ impactMs: 400, fadeMs: 600, countMs: 800, totalMs: 1800 });
+
+  // Presentation only: never advances physics or changes the frozen final score.
+  function settlementPresentation(elapsedMs, finalScore, reducedMotion = false) {
+    const time = Number.isFinite(elapsedMs) ? Math.max(0, elapsedMs) : 0;
+    const score = Number.isSafeInteger(finalScore) && finalScore >= 0 ? finalScore : 0;
+    const fadeStart = SETTLEMENT.impactMs;
+    const countStart = fadeStart + SETTLEMENT.fadeMs;
+    const phase = time < fadeStart ? 'impact' : time < countStart ? 'fade' :
+      time < SETTLEMENT.totalMs ? 'count' : 'ready';
+    const impact = Math.min(time / fadeStart, 1);
+    const opacity = Math.max(0, Math.min((time - fadeStart) / SETTLEMENT.fadeMs, 1));
+    const progress = Math.max(0, Math.min((time - countStart) / SETTLEMENT.countMs, 1));
+    return {
+      phase,
+      opacity: reducedMotion ? (phase === 'impact' ? 0 : 1) : opacity,
+      shake: reducedMotion || impact === 1 ? 0 : Math.sin(impact * Math.PI * 4) * (1 - impact) * Math.PI / 45,
+      tilt: reducedMotion ? 0 : (1 - Math.pow(1 - impact, 3)) * Math.PI / 30,
+      score: phase === 'ready' ? score : reducedMotion ? 0 : Math.floor(score * progress)
+    };
+  }
 
   function createGame() {
     return {
@@ -140,7 +161,8 @@
     };
   }
 
-  const api = Object.freeze({ WORLD, PHYSICS, createGame, startGame, jump, update, pause, resume,
+  const api = Object.freeze({ WORLD, PHYSICS, SETTLEMENT, settlementPresentation,
+    createGame, startGame, jump, update, pause, resume,
     overlaps, playerBounds, obstacleBounds, createControls });
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.PelicanGame = api;

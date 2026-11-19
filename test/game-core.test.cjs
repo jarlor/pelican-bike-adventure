@@ -2,6 +2,72 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const Game = require('../game-core.js');
 
+test('settlement stages last 400, 600 and 800 ms and preserve the final result indefinitely', () => {
+  const at = time => Game.settlementPresentation(time, 20);
+  assert.equal(Game.SETTLEMENT.totalMs, 1800);
+  assert.equal(at(0).phase, 'impact');
+  assert.equal(at(399).phase, 'impact');
+  assert.equal(at(400).phase, 'fade');
+  assert.equal(at(400).opacity, 0);
+  assert.equal(at(700).opacity, 0.5);
+  assert.equal(at(999).phase, 'fade');
+  assert.equal(at(1000).phase, 'count');
+  assert.equal(at(1000).opacity, 1);
+  assert.equal(at(1000).score, 0);
+  assert.equal(at(1400).score, 10);
+  assert.equal(at(1799).phase, 'count');
+  assert.equal(at(1800).phase, 'ready');
+  assert.equal(at(1800).score, 20);
+  assert.deepEqual(at(1800), at(60000));
+  assert.equal(at(400).shake, 0);
+  assert.equal(at(400).tilt, Math.PI / 30);
+  assert.ok(Math.abs(at(50).shake) > Math.abs(at(350).shake));
+});
+
+test('settlement rejects invalid inputs and handles zero and safe-integer scores exactly', () => {
+  for (const time of [NaN, Infinity, -Infinity, -5, undefined]) {
+    assert.deepEqual(Game.settlementPresentation(time, 0), Game.settlementPresentation(0, 0));
+  }
+  for (const score of [NaN, Infinity, -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.equal(Game.settlementPresentation(1800, score).score, 0);
+  }
+  for (const score of [0, 1, 2, Number.MAX_SAFE_INTEGER]) {
+    let previous = 0;
+    for (let time = 0; time <= 1800; time += 10) {
+      const result = Game.settlementPresentation(time, score);
+      assert.ok(Number.isSafeInteger(result.score));
+      assert.ok(result.score >= previous && result.score <= score);
+      previous = result.score;
+    }
+    assert.equal(previous, score);
+    assert.equal(Game.settlementPresentation(0, score).phase, 'impact');
+  }
+});
+
+test('settlement is based on elapsed time rather than number of frames', () => {
+  function atFrameRate(fps) {
+    let time = 0;
+    for (let frame = 0; frame < fps * 1.5; frame++) time += 1000 / fps;
+    return Game.settlementPresentation(time, 7);
+  }
+  const slow = atFrameRate(30);
+  const fast = atFrameRate(120);
+  assert.equal(slow.phase, fast.phase);
+  assert.equal(slow.score, fast.score);
+  assert.equal(slow.opacity, fast.opacity);
+});
+
+test('reduced motion keeps the timing but disables shaking, tilting, fading and rolling digits', () => {
+  for (const time of [0, 50, 399, 400, 700, 1000, 1400, 1799, 1800]) {
+    const result = Game.settlementPresentation(time, 12, true);
+    assert.equal(result.phase, Game.settlementPresentation(time, 12).phase);
+    assert.equal(result.shake, 0);
+    assert.equal(result.tilt, 0);
+    assert.equal(result.opacity, time < 400 ? 0 : 1);
+    assert.equal(result.score, time < 1800 ? 0 : 12);
+  }
+});
+
 function running() {
   const state = Game.createGame();
   Game.startGame(state);
@@ -82,6 +148,25 @@ test('holding space cannot auto-jump after landing or reset a finished run', () 
 });
 
 for (const kind of ['cone', 'crate']) {
+  test(`${kind}: an airborne impact freezes the ride while presentation advances independently`, () => {
+    const state = running();
+    state.player.y = 20;
+    state.player.velocity = -100;
+    state.cleared = 3;
+    state.obstacles = [{ id: 1, x: 300, width: 46, height: 55, kind, passed: false }];
+    Game.update(state, 1 / 60);
+    assert.equal(state.status, 'over');
+    assert.ok(state.player.y > 0);
+    assert.equal(state.cleared, 3);
+    const snapshot = JSON.stringify(state);
+    for (let time = 0; time <= 2000; time += 10) {
+      Game.update(state, 1 / 60);
+      Game.settlementPresentation(time, state.cleared);
+    }
+    assert.equal(JSON.stringify(state), snapshot);
+    assert.equal(state.obstacles[0].passed, false);
+  });
+
   test(`${kind}: a grounded collision ends the run and freezes all movement`, () => {
     const state = running();
     state.obstacles = [{ id: 1, x: 300, width: 46, height: 55, kind, passed: false }];

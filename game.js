@@ -18,6 +18,7 @@
   const score = document.getElementById('score');
   const best = document.getElementById('best-score');
   const storageNote = document.getElementById('storage-note');
+  const announcement = document.getElementById('result-announcement');
 
   if (!ctx) {
     title.textContent = '暂时无法绘制游戏';
@@ -33,6 +34,11 @@
   const ground = Game.WORLD.ground;
   let previousTime = null;
   let displayedStatus = null;
+  let settlement = null;
+  let presentation = null;
+  let windowFocused = true;
+  const motionPreference = typeof window.matchMedia === 'function' ?
+    window.matchMedia('(prefers-reduced-motion: reduce)') : null;
 
   // Keep the record outside state: starting a new ride resets all game state.
   const bestScoreKey = 'pelican-bike-adventure.bestScore';
@@ -258,6 +264,7 @@
     ellipse(x + 5, ground + 6, 84 - Math.min(y / 5, 23), 8, '#6b67452b');
     ctx.save();
     ctx.translate(x, ground - y + bob - 1);
+    if (presentation) ctx.rotate(presentation.tilt);
 
     // Two wheels, a diamond frame, saddle, handlebars and rotating pedals.
     drawWheel(-45, -25, phase);
@@ -274,6 +281,11 @@
     line([[12 - pedalX, -25 - pedalY], [12 + pedalX, -25 + pedalY]], '#3c6153', 3);
     line([[7 + pedalX, -25 + pedalY], [19 + pedalX, -25 + pedalY]], '#314d43', 3);
 
+    // The bird sways independently of the bicycle, around the centre of its body.
+    ctx.save();
+    ctx.translate(-20, -108);
+    if (presentation) ctx.rotate(presentation.shake);
+    ctx.translate(20, 108);
     // The far leg and a broad body with a swept tail.
     line([[-27, -87], [-28, -55], [12 - pedalX, -28 - pedalY]], '#ba884a', 5);
     polygon([[-41, -108], [-73, -111], [-55, -91], [-32, -81]], '#e3e6cf');
@@ -327,6 +339,7 @@
       line([[-87, -78], [-111, -78]], '#fcf1cf', 2);
     }
     ctx.restore();
+    ctx.restore();
   }
 
   function render() {
@@ -342,8 +355,19 @@
   function syncInterface() {
     distance.textContent = String(Math.floor(state.distance / 10)).padStart(3, '0');
     cleared.textContent = String(state.cleared).padStart(2, '0');
-    if (displayedStatus === state.status) return;
+    if (displayedStatus === state.status) {
+      syncSettlement();
+      return;
+    }
     displayedStatus = state.status;
+    settlement = null;
+    presentation = null;
+    announcement.textContent = '';
+    score.textContent = '0';
+    overlay.style.opacity = '';
+    overlay.inert = false;
+    overlay.setAttribute('aria-hidden', 'false');
+    stage.setAttribute('data-settlement', '');
     overlay.hidden = state.status === 'running';
     stage.setAttribute('data-status', state.status);
     results.hidden = state.status !== 'over';
@@ -352,18 +376,18 @@
       status.textContent = '骑行中 · 看准障碍，轻按空格';
     } else if (state.status === 'over') {
       recordScore();
-      score.textContent = String(state.cleared);
+      settlement = { elapsedMs: 0, score: state.cleared, distance: Math.floor(state.distance / 10),
+        focusPending: document.activeElement === stage, announced: false };
       best.textContent = String(bestScore);
       storageNote.hidden = storageAvailable;
       storageNote.textContent = storageAvailable ? '' : '纪录无法保存，最高分仅在当前页面有效。';
       kicker.textContent = 'EVERY RIDE IS A GOOD RIDE';
       title.textContent = '休整一下，再出发。';
-      description.textContent = `本次骑行 ${Math.floor(state.distance / 10)} 米，越过 ${state.cleared} 个障碍。下一次，试着提前一点起跳。`;
+      description.textContent = `本次骑行 ${settlement.distance} 米。下一次，试着提前一点起跳。`;
       button.textContent = '再骑一次 ↗';
-      hint.textContent = '也可以按空格重新开始并跳跃';
-      status.textContent = '碰到障碍了 · 按空格或选择“再骑一次”';
+      hint.textContent = '动画期间也可按空格重新开始并跳跃';
+      status.textContent = '碰到障碍了 · 随时按空格重开，或选择“再骑一次”';
       stage.setAttribute('aria-label', '游戏结束，按空格重新开始');
-      if (document.activeElement === stage) button.focus({ preventScroll: true });
     } else if (state.status === 'paused') {
       kicker.textContent = 'TAKE YOUR TIME';
       title.textContent = '海风会等你。';
@@ -372,6 +396,29 @@
       hint.textContent = '也可以按空格继续';
       status.textContent = '已暂停 · 按空格继续骑行';
       stage.setAttribute('aria-label', '游戏已暂停，按空格继续');
+    }
+    syncSettlement();
+  }
+
+  function syncSettlement() {
+    if (!settlement) return;
+    presentation = Game.settlementPresentation(settlement.elapsedMs, settlement.score,
+      Boolean(motionPreference && motionPreference.matches));
+    stage.setAttribute('data-settlement', presentation.phase);
+    overlay.style.opacity = String(presentation.opacity);
+    const hidden = presentation.opacity === 0;
+    overlay.inert = hidden;
+    overlay.setAttribute('aria-hidden', String(hidden));
+    score.textContent = String(presentation.score);
+    // Wait until the panel is visible; never move focus to an invisible button.
+    if (settlement.focusPending && presentation.opacity > 0) {
+      if (document.activeElement === stage) button.focus({ preventScroll: true });
+      settlement.focusPending = false;
+    }
+    if (presentation.phase === 'ready' && !settlement.announced) {
+      announcement.textContent = `本次骑行 ${settlement.distance} 米，本次得分 ${settlement.score}，历史最高分 ${bestScore}。` +
+        (storageAvailable ? '' : '纪录无法保存，最高分仅在当前页面有效。');
+      settlement.announced = true;
     }
   }
 
@@ -389,8 +436,14 @@
     const tag = event.target && event.target.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' ||
         (event.target && event.target.isContentEditable)) return;
+    const before = state.status;
     controls.keyDown(event);
+    if (before !== state.status) {
+      previousTime = null;
+      stage.focus({ preventScroll: true });
+    }
     syncInterface();
+    render();
   });
   window.addEventListener('keyup', event => controls.keyUp(event));
 
@@ -400,7 +453,14 @@
     previousTime = null;
     syncInterface();
   }
-  window.addEventListener('blur', suspend);
+  window.addEventListener('blur', () => {
+    windowFocused = false;
+    suspend();
+  });
+  window.addEventListener('focus', () => {
+    windowFocused = true;
+    previousTime = null;
+  });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) suspend();
     previousTime = null;
@@ -409,9 +469,12 @@
   function frame(time) {
     const dt = previousTime === null ? 0 : (time - previousTime) / 1000;
     previousTime = time;
+    if (settlement && windowFocused && !document.hidden && Number.isFinite(dt) && dt > 0) {
+      settlement.elapsedMs = Math.min(Game.SETTLEMENT.totalMs, settlement.elapsedMs + Math.min(dt, 0.1) * 1000);
+    }
     Game.update(state, dt);
-    render();
     syncInterface();
+    render();
     window.requestAnimationFrame(frame);
   }
 

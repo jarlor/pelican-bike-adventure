@@ -26,19 +26,26 @@ function createStorage(initialValue = null, { readError = false, writeError = fa
 
 // This harness executes the actual browser scripts and their event listeners.
 // It checks DOM/input wiring; the canvas adapter does not verify rendered pixels.
-function loadPage({ canvasSupported = true, storage = createStorage(), storageAccessError = false } = {}) {
+function loadPage({ canvasSupported = true, storage = createStorage(), storageAccessError = false,
+  reducedMotion = false } = {}) {
   const windowEvents = new Map();
   const documentEvents = new Map();
   const frames = [];
   const elements = new Map();
   let drawingCalls = 0;
   let time = 0;
+  let saveDepth = 0;
+  let rotations = [];
+  const motionPreference = { matches: reducedMotion };
   const context = {};
   const drawMethods = ['beginPath', 'closePath', 'save', 'restore', 'fill', 'stroke',
-    'moveTo', 'lineTo', 'bezierCurveTo', 'quadraticCurveTo', 'translate', 'scale', 'ellipse', 'fillRect'];
+    'moveTo', 'lineTo', 'bezierCurveTo', 'quadraticCurveTo', 'translate', 'scale', 'rotate', 'ellipse', 'fillRect'];
   for (const method of drawMethods) {
     context[method] = (...args) => {
       for (const number of args) assert.ok(Number.isFinite(number), `${method}: invalid coordinate`);
+      if (method === 'save') saveDepth++;
+      if (method === 'restore') assert.ok(--saveDepth >= 0, 'Canvas restore must have a matching save');
+      if (method === 'rotate') rotations.push(args[0]);
       drawingCalls++;
     };
   }
@@ -46,7 +53,10 @@ function loadPage({ canvasSupported = true, storage = createStorage(), storageAc
 
   for (const [tag, id] of html.matchAll(/<[^>]*\bid="([^"]+)"[^>]*>/g)) {
     elements.set(id, {
-      id, textContent: '', hidden: /\shidden(?:\s|>)/.test(tag), attributes: {}, events: new Map(),
+      id, tagName: tag.match(/^<(\w+)/)[1].toUpperCase(), text: '', textWrites: 0,
+      get textContent() { return this.text; },
+      set textContent(value) { this.text = String(value); this.textWrites++; },
+      hidden: /\shidden(?:\s|>)/.test(tag), attributes: {}, events: new Map(), style: {},
       addEventListener(name, handler) { this.events.set(name, handler); },
       setAttribute(name, value) { this.attributes[name] = value; },
       focus() { document.activeElement = this; }
@@ -66,6 +76,10 @@ function loadPage({ canvasSupported = true, storage = createStorage(), storageAc
   };
   const sandbox = {
     document,
+    matchMedia(query) {
+      assert.equal(query, '(prefers-reduced-motion: reduce)');
+      return motionPreference;
+    },
     Math: Object.assign(Object.create(Math), { random: () => 0.5 }),
     addEventListener(name, handler) { windowEvents.set(name, handler); },
     requestAnimationFrame(handler) { frames.push(handler); }
@@ -83,7 +97,8 @@ function loadPage({ canvasSupported = true, storage = createStorage(), storageAc
     vm.runInContext(fs.readFileSync(path.join(repository, script), 'utf8'), sandbox, { filename: script });
   }
   return {
-    elements, document,
+    elements, document, motionPreference,
+    get rotations() { return rotations.slice(); },
     get drawingCalls() { return drawingCalls; },
     get pendingFrames() { return frames.length; },
     emit(name, event) { windowEvents.get(name)(event); },
@@ -91,13 +106,19 @@ function loadPage({ canvasSupported = true, storage = createStorage(), storageAc
       document.hidden = hidden;
       documentEvents.get('visibilitychange')();
     },
-    click() { elements.get('action-button').events.get('click')(); },
-    step(count) {
+    click() {
+      assert.equal(elements.get('overlay').hidden, false);
+      assert.ok(!elements.get('overlay').inert, 'A hidden result button cannot be clicked');
+      elements.get('action-button').events.get('click')();
+    },
+    step(count, deltaMs = 1000 / 60) {
       for (let i = 0; i < count; i++) {
-        time += 1000 / 60;
+        time += deltaMs;
+        rotations = [];
         const frame = frames.shift();
         assert.ok(frame, 'Animation loop must remain scheduled');
         frame(time);
+        assert.equal(saveDepth, 0, 'Every frame must restore all Canvas transforms');
       }
     }
   };
@@ -109,13 +130,17 @@ function key(overrides = {}) {
 
 // With a fixed random sequence, these distances time genuine space-bar jumps
 // over the first two obstacles; no game state or collision code is replaced.
-function finishRide(page, cleared = 0) {
+function finishRide(page, cleared = 0, { settle = true } = {}) {
   const jumpDistances = [67, 140];
   assert.ok(cleared <= jumpDistances.length);
   let jumps = Number(page.elements.get('cleared').textContent);
   for (let frame = 0; frame < 600; frame++) {
     if (/碰到障碍/.test(page.elements.get('game-status').textContent)) {
       assert.equal(Number(page.elements.get('cleared').textContent), cleared);
+      if (settle) {
+        page.step(110);
+        assert.equal(page.elements.get('stage').attributes['data-settlement'], 'ready');
+      }
       return;
     }
     if (jumps < cleared && Number(page.elements.get('distance').textContent) >= jumpDistances[jumps]) {
@@ -133,6 +158,210 @@ function assertResults(page, score, best) {
   assert.equal(page.elements.get('score').textContent, String(score));
   assert.equal(page.elements.get('best-score').textContent, String(best));
 }
+
+test('collision animates the bird, fades the panel, rolls the score and announces only the final result', () => {
+  const storage = createStorage();
+  const page = loadPage({ storage });
+  const get = id => page.elements.get(id);
+  page.click();
+  finishRide(page, 2, { settle: false });
+  const distance = get('distance').textContent;
+  assert.deepEqual(storage.writes, [[bestScoreKey, '2']], 'Save at collision, before animation');
+  assert.equal(get('stage').attributes['data-settlement'], 'impact');
+  assert.equal(get('overlay').style.opacity, '0');
+  assert.equal(get('overlay').inert, true);
+  assert.equal(get('overlay').attributes['aria-hidden'], 'true');
+  assert.equal(page.document.activeElement, get('stage'));
+  assert.equal(get('score').textContent, '0');
+  assert.doesNotMatch(get('overlay-description').textContent, /越过 2/);
+  assert.equal(get('result-announcement').textContent, '');
+  const writesBefore = get('result-announcement').textWrites;
+  page.step(3);
+  assert.equal(page.rotations.length, 2);
+  assert.ok(page.rotations.every(angle => angle !== 0 && Math.abs(angle) <= Math.PI / 30));
+  page.step(12);
+  assert.equal(get('stage').attributes['data-settlement'], 'impact');
+  page.step(15);
+  assert.equal(get('stage').attributes['data-settlement'], 'fade');
+  assert.ok(Number(get('overlay').style.opacity) > 0 && Number(get('overlay').style.opacity) < 1);
+  assert.equal(get('overlay').inert, false);
+  assert.equal(page.document.activeElement, get('action-button'));
+  assert.equal(get('score').textContent, '0');
+  page.step(55);
+  assert.equal(get('stage').attributes['data-settlement'], 'count');
+  assert.equal(get('overlay').style.opacity, '1');
+  assert.equal(get('score').textContent, '1');
+  assert.equal(get('result-announcement').textWrites, writesBefore);
+  page.step(25);
+  assertResults(page, 2, 2);
+  assert.match(get('result-announcement').textContent, /本次得分 2，历史最高分 2/);
+  assert.equal(get('result-announcement').textWrites, writesBefore + 1);
+  page.step(600);
+  assertResults(page, 2, 2);
+  assert.equal(get('distance').textContent, distance);
+  assert.equal(get('result-announcement').textWrites, writesBefore + 1);
+  assert.equal(storage.writes.length, 1);
+});
+
+for (const [phase, frames] of [['impact', 6], ['fade', 36], ['count', 84], ['ready', 120]]) {
+  test(`space immediately restarts and jumps during ${phase}, leaving no previous animation`, () => {
+    const storage = createStorage();
+    const page = loadPage({ storage });
+    const get = id => page.elements.get(id);
+    page.click();
+    finishRide(page, 1, { settle: false });
+    page.step(frames);
+    assert.equal(get('stage').attributes['data-settlement'], phase);
+    assert.equal(storage.values.get(bestScoreKey), '1');
+    let prevented = 0;
+    const drawingBefore = page.drawingCalls;
+    page.emit('keydown', key({ target: page.document.activeElement,
+      preventDefault() { prevented++; } }));
+    assert.equal(prevented, 1, 'Also suppress the native Space click on a focused button');
+    assert.ok(page.drawingCalls > drawingBefore, 'Restart paints immediately');
+    assert.equal(get('stage').attributes['data-status'], 'running');
+    assert.equal(get('stage').attributes['data-settlement'], '');
+    assert.equal(get('overlay').hidden, true);
+    assert.equal(get('overlay').style.opacity, '');
+    assert.equal(get('score').textContent, '0');
+    assert.equal(get('distance').textContent, '000');
+    assert.equal(get('cleared').textContent, '00');
+    assert.equal(get('result-announcement').textContent, '');
+    assert.equal(page.document.activeElement, get('stage'));
+    page.step(10);
+    assert.deepEqual(page.rotations, []);
+    assert.ok(Number(get('distance').textContent) > 0);
+    assert.equal(get('overlay').hidden, true);
+    assert.equal(storage.writes.length, 1);
+    page.emit('keydown', key({ repeat: true }));
+    page.emit('keydown', key());
+    assert.equal(get('stage').attributes['data-status'], 'running');
+    page.emit('keyup', key());
+    // No additional jump: a Space restart clears the first cone in the real physics.
+    finishRide(page, 1);
+    assertResults(page, 1, 1);
+    assert.equal(storage.writes.length, 1);
+  });
+}
+
+for (const frames of [36, 84, 120]) {
+  test(`button restart clears settlement after ${frames} frames`, () => {
+    const page = loadPage();
+    page.click();
+    finishRide(page, 1, { settle: false });
+    page.step(frames);
+    page.click();
+    assert.equal(page.elements.get('stage').attributes['data-status'], 'running');
+    assert.equal(page.elements.get('stage').attributes['data-settlement'], '');
+    assert.equal(page.elements.get('score').textContent, '0');
+    assert.equal(page.elements.get('result-announcement').textContent, '');
+    finishRide(page);
+    assertResults(page, 0, 1);
+  });
+}
+
+test('holding space through a collision cannot restart until release and a fresh press', () => {
+  const page = loadPage();
+  page.click();
+  page.emit('keydown', key());
+  finishRide(page, 0, { settle: false });
+  page.emit('keydown', key({ repeat: true }));
+  page.emit('keydown', key());
+  assert.equal(page.elements.get('stage').attributes['data-status'], 'over');
+  page.emit('keyup', key());
+  page.emit('keydown', key());
+  assert.equal(page.elements.get('stage').attributes['data-status'], 'running');
+  assert.equal(page.elements.get('overlay').hidden, true);
+});
+
+test('Space on the collision frame restarts without waiting for the first animation frame', () => {
+  const storage = createStorage();
+  const page = loadPage({ storage });
+  page.click();
+  finishRide(page, 1, { settle: false });
+  page.emit('keydown', key());
+  assert.equal(page.elements.get('stage').attributes['data-status'], 'running');
+  assert.equal(page.elements.get('overlay').hidden, true);
+  assert.deepEqual(storage.writes, [[bestScoreKey, '1']]);
+  page.emit('keyup', key());
+  page.step(110);
+  assert.equal(page.elements.get('result-announcement').textContent, '');
+});
+
+for (const method of ['visibility', 'focus']) {
+  test(`${method} suspension freezes settlement without changing it into a paused ride`, () => {
+    const page = loadPage();
+    page.click();
+    finishRide(page, 2, { settle: false });
+    page.step(36);
+    const opacity = page.elements.get('overlay').style.opacity;
+    if (method === 'visibility') page.visibility(true);
+    else page.emit('blur');
+    page.step(180);
+    assert.equal(page.elements.get('overlay').style.opacity, opacity);
+    assert.equal(page.elements.get('stage').attributes['data-status'], 'over');
+    if (method === 'visibility') page.visibility(false);
+    else page.emit('focus');
+    page.step(1, 60000);
+    assert.equal(page.elements.get('overlay').style.opacity, opacity, 'Returning frame resets its timestamp');
+    page.step(10);
+    assert.ok(Number(page.elements.get('overlay').style.opacity) > Number(opacity));
+    page.step(120);
+    assertResults(page, 2, 2);
+  });
+}
+
+test('reduced motion uses static stages and reacts to preference changes during settlement', () => {
+  const page = loadPage({ reducedMotion: true });
+  page.click();
+  finishRide(page, 2, { settle: false });
+  page.step(6);
+  assert.ok(page.rotations.every(angle => angle === 0));
+  page.step(30);
+  assert.equal(page.elements.get('overlay').style.opacity, '1');
+  page.step(48);
+  assert.equal(page.elements.get('score').textContent, '0');
+  page.motionPreference.matches = false;
+  page.step(1);
+  assert.equal(page.elements.get('score').textContent, '1');
+  page.motionPreference.matches = true;
+  page.step(30);
+  assertResults(page, 2, 2);
+  assert.ok(page.rotations.every(angle => angle === 0));
+});
+
+for (const fps of [10, 30, 120]) {
+  test(`the page reaches each settlement stage at ${fps} frames per second`, () => {
+    const page = loadPage();
+    page.click();
+    finishRide(page, 2, { settle: false });
+    page.step(Math.round(fps * 0.3), 1000 / fps);
+    assert.equal(page.elements.get('stage').attributes['data-settlement'], 'impact');
+    page.step(Math.round(fps * 0.4), 1000 / fps);
+    assert.equal(page.elements.get('stage').attributes['data-settlement'], 'fade');
+    page.step(Math.round(fps * 0.8), 1000 / fps);
+    assert.equal(page.elements.get('stage').attributes['data-settlement'], 'count');
+    assert.equal(page.elements.get('score').textContent, '1');
+    page.step(Math.ceil(fps * 0.4), 1000 / fps);
+    assert.equal(page.elements.get('stage').attributes['data-settlement'], 'ready');
+    assertResults(page, 2, 2);
+  });
+}
+
+test('a failed record write still permits immediate restart and retains the session best', () => {
+  const storage = createStorage('1', { writeError: true });
+  const page = loadPage({ storage });
+  page.click();
+  finishRide(page, 2, { settle: false });
+  assert.equal(page.elements.get('storage-note').hidden, false);
+  page.emit('keydown', key());
+  page.emit('keyup', key());
+  finishRide(page, 1);
+  assertResults(page, 1, 2);
+  assert.equal(storage.values.get(bestScoreKey), '1');
+  assert.equal(storage.writes.length, 1);
+  assert.match(page.elements.get('result-announcement').textContent, /纪录无法保存/);
+});
 
 test('the offline entry point loads local styles and the browser scripts in order', () => {
   const scripts = [...html.matchAll(/<script src="([^"]+)" defer><\/script>/g)].map(match => match[1]);
@@ -163,7 +392,7 @@ test('button start, collision feedback and button restart form a complete loop',
   page.click();
   assert.equal(page.document.activeElement, page.elements.get('stage'));
   assert.equal(page.elements.get('overlay').hidden, true);
-  page.step(200);
+  finishRide(page);
   assert.equal(page.elements.get('overlay').hidden, false);
   assert.match(page.elements.get('game-status').textContent, /碰到障碍/);
   assert.match(page.elements.get('overlay-description').textContent, /本次骑行 \d+ 米/);
