@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f6f5ef">
+    <title>鹈鹕的海岸骑行 · Pelican Bike Adventure</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="game-core.js" defer></script>
+    <script src="game.js" defer></script>
+  </head>
+  <body>
+    <main class="page">
+      <header class="masthead">
+        <a class="brand" href="./index.html" aria-label="鹈鹕骑行，返回首页">
+          <svg class="brand-mark" viewBox="0 0 44 44" aria-hidden="true">
+            <circle cx="22" cy="22" r="21" fill="currentColor"/>
+            <path d="M11 29c-1-7 1-13 7-14 4-1 7 0 9 3l9 4-10 2c-2 7-8 10-15 5Z" fill="#f6f5ef"/>
+            <circle cx="25" cy="18" r="1.4" fill="#173c3d"/>
+            <path d="m27 23 7-1-6 5" fill="#e58c4c"/>
+          </svg>
+          <span>PELICAN<span class="brand-sub">BICYCLE CLUB</span></span>
+        </a>
+        <span class="edition"><span class="status-dot"></span> 海岸路线 · 第 01 站</span>
+      </header>
+
+      <section class="intro" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">A LITTLE RIDE, A LITTLE ADVENTURE</p>
+          <h1 id="page-title">鹈鹕的<span>海岸骑行</span><span class="title-dot">。</span></h1>
+        </div>
+        <p class="intro-copy">骑上单车，追着海风向前。<br>按下 <kbd>空格</kbd>，让小小障碍留在身后。</p>
+      </section>
+
+      <section class="game" aria-label="鹈鹕骑单车游戏">
+        <div class="game-topbar">
+          <span class="route"><span class="route-icon" aria-hidden="true">↗</span> 沿海公路 <span class="route-divider">/</span> COASTAL RIDE</span>
+          <div class="metrics">
+            <span class="metric-label">骑行距离 <strong id="distance">000</strong><span class="unit">m</span></span>
+            <span class="metric-label obstacles-metric">越过障碍 <strong id="cleared">00</strong></span>
+          </div>
+        </div>
+        <div class="stage" id="stage" tabindex="0" aria-label="游戏区域，按空格开始并跳跃">
+          <canvas id="game-canvas" width="1200" height="540" role="img" aria-label="骑着薄荷绿单车的鹈鹕，在海岸公路上跳过路锥和木箱。">请使用支持 Canvas 的现代浏览器。按空格控制骑单车的鹈鹕跳过障碍。</canvas>
+          <div class="overlay" id="overlay">
+            <div class="overlay-card">
+              <p class="overlay-kicker" id="overlay-kicker">THE COAST IS CALLING</p>
+              <h2 id="overlay-title">海风正好，<br>出发吧。</h2>
+              <p id="overlay-description">一只鹈鹕，一辆单车，一路好风景。</p>
+              <button id="action-button" type="button">开始骑行 <span aria-hidden="true">↗</span></button>
+              <span class="start-hint" id="start-hint">也可以按空格开始并跳跃</span>
+            </div>
+          </div>
+          <span class="scene-label" aria-hidden="true">BREATHE IN. PEDAL ON.</span>
+        </div>
+        <div class="game-bottom-bar">
+          <span class="key-instruction"><kbd>SPACE</kbd> <span>轻按跳跃 · 落地后可再次起跳</span></span>
+          <span class="game-status" id="game-status" role="status" aria-live="polite">准备好迎着海风出发</span>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <span><span class="footer-star" aria-hidden="true">✳</span> 不赶路，只管享受这段小冒险。</span>
+        <span>MADE FOR A LITTLE BREAK <span aria-hidden="true">↗</span></span>
+      </footer>
+    </main>
+  </body>
+</html>
