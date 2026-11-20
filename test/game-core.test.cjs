@@ -118,7 +118,7 @@ test('jump rises, rejects a second jump, lands exactly, and permits another jump
   assert.equal(Game.jump(state), true);
 });
 
-test('space prevents scrolling, ignores other keys and starts with a jump', () => {
+test('a quick first Space starts grounded and a fresh press after release jumps', () => {
   const state = Game.createGame();
   const controls = Game.createControls(state);
   let prevented = 0;
@@ -127,6 +127,43 @@ test('space prevents scrolling, ignores other keys and starts with a jump', () =
   assert.equal(controls.keyDown(space({ preventDefault() { prevented++; } })), true);
   assert.equal(prevented, 1);
   assert.equal(state.status, 'running');
+  assert.equal(state.player.y, 0);
+  assert.equal(state.player.velocity, 0);
+  // A complete tap before the first frame must not leave a pending jump.
+  controls.keyUp(space());
+  advance(state, 0.1);
+  assert.ok(state.distance > 0);
+  assert.equal(state.player.y, 0);
+  assert.equal(state.player.velocity, 0);
+  assert.equal(controls.keyDown(space()), true);
+  assert.equal(state.player.velocity, Game.PHYSICS.jumpSpeed);
+  advance(state, 0.1);
+  assert.ok(state.player.y > 0);
+});
+
+test('holding the first Space cannot jump or restart before Space keyup', () => {
+  const state = Game.createGame();
+  const controls = Game.createControls(state);
+  assert.equal(controls.keyDown(space({ repeat: true })), false);
+  assert.equal(state.status, 'ready');
+  assert.equal(controls.keyDown(space()), true);
+  advance(state, 0.2);
+  assert.equal(state.player.y, 0);
+  assert.equal(state.player.velocity, 0);
+  const snapshot = JSON.stringify(state);
+  for (const repeat of [true, false]) {
+    assert.equal(controls.keyDown(space({ repeat })), false);
+    assert.equal(JSON.stringify(state), snapshot);
+  }
+  controls.keyUp(space({ code: 'Enter' }));
+  assert.equal(controls.keyDown(space()), false);
+  advance(state, 0.2);
+  assert.ok(state.distance > JSON.parse(snapshot).distance);
+  assert.equal(state.player.y, 0);
+  assert.equal(state.player.velocity, 0);
+  controls.keyUp(space());
+  assert.equal(controls.keyDown(space({ repeat: true })), false);
+  assert.equal(controls.keyDown(space()), true);
   assert.equal(state.player.velocity, Game.PHYSICS.jumpSpeed);
 });
 

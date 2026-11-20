@@ -40,7 +40,7 @@
             <span class="metric-label obstacles-metric">越过障碍 <strong id="cleared">00</strong></span>
           </div>
         </div>
-        <div class="stage" id="stage" tabindex="0" aria-label="游戏区域，按空格开始并跳跃">
+        <div class="stage" id="stage" tabindex="0" aria-label="游戏区域，空格开始，松开后再按跳跃">
           <canvas id="game-canvas" width="1200" height="540" role="img" aria-label="骑着薄荷绿单车的鹈鹕，在海岸公路上跳过路锥和木箱。">请使用支持 Canvas 的现代浏览器。按空格控制骑单车的鹈鹕跳过障碍。</canvas>
           <div class="overlay" id="overlay">
             <div class="overlay-card">
@@ -55,7 +55,7 @@
                 <p class="storage-note" id="storage-note" hidden></p>
               </div>
               <button id="action-button" type="button">开始骑行 <span aria-hidden="true">↗</span></button>
-              <span class="start-hint" id="start-hint">也可以按空格开始并跳跃</span>
+              <span class="start-hint" id="start-hint">空格开始，松开后再按跳跃</span>
             </div>
           </div>
           <span id="result-announcement" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></span>

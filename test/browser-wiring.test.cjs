@@ -423,16 +423,95 @@ test('the offline entry point loads local styles and the browser scripts in orde
   assert.equal(page.elements.get('distance').textContent, '000');
 });
 
-test('space starts the real page, prevents scrolling, and updates the distance', () => {
+for (const entry of ['new page', 'reloaded page']) {
+  test(`the first Space starts grounded, then release and a fresh press jump (${entry})`, () => {
+    const storage = createStorage();
+    if (entry === 'reloaded page') {
+      const previous = loadPage({ storage });
+      previous.emit('keydown', key());
+      previous.step(10);
+      // Reload with Space still held in the old instance: input state is page-local.
+    }
+    const page = loadPage({ storage });
+    let prevented = 0;
+    page.emit('keydown', key({ preventDefault() { prevented++; } }));
+    assert.equal(prevented, 1);
+    assert.equal(page.elements.get('stage').attributes['data-status'], 'running');
+    assert.equal(page.elements.get('overlay').hidden, true);
+    assert.match(page.elements.get('game-status').textContent, /骑行中/);
+    assert.equal(page.document.activeElement, page.elements.get('stage'));
+    assert.equal(page.player.y, 0);
+    assert.equal(page.player.velocity, 0);
+    page.emit('keyup', key());
+    page.step(60);
+    assert.ok(Number(page.elements.get('distance').textContent) >= 30);
+    assert.equal(page.player.y, 0);
+    assert.equal(page.player.velocity, 0);
+    page.emit('keydown', key({ target: page.document.activeElement }));
+    assert.ok(page.player.velocity > 0);
+    page.emit('keyup', key());
+    page.step(6);
+    assert.ok(page.player.y > 0);
+  });
+}
+
+test('holding the first Space ignores repeat and extra keydowns until release', () => {
   const page = loadPage();
+  page.emit('keydown', key());
+  page.step(30);
+  const distance = page.elements.get('distance').textContent;
+  for (const repeat of [true, false]) {
+    page.emit('keydown', key({ repeat }));
+    assert.equal(page.elements.get('distance').textContent, distance);
+    assert.equal(page.player.y, 0);
+    assert.equal(page.player.velocity, 0);
+  }
+  page.emit('keyup', key({ code: 'Enter' }));
+  page.emit('keydown', key());
+  page.step(30);
+  assert.ok(Number(page.elements.get('distance').textContent) > Number(distance));
+  assert.equal(page.player.y, 0);
+  assert.equal(page.player.velocity, 0);
+  page.emit('keyup', key());
+  page.emit('keydown', key());
+  assert.ok(page.player.velocity > 0);
+  page.emit('keyup', key());
+  page.step(6);
+  assert.ok(page.player.y > 0);
+});
+
+test('Space on the focused start button starts once without jumping', () => {
+  const page = loadPage();
+  const button = page.elements.get('action-button');
+  button.focus();
   let prevented = 0;
-  page.emit('keydown', key({ preventDefault() { prevented++; } }));
+  page.emit('keydown', key({ target: button, preventDefault() { prevented++; } }));
   assert.equal(prevented, 1);
   assert.equal(page.elements.get('overlay').hidden, true);
-  assert.match(page.elements.get('game-status').textContent, /骑行中/);
-  page.step(60);
-  assert.ok(Number(page.elements.get('distance').textContent) >= 30);
+  assert.equal(page.document.activeElement, page.elements.get('stage'));
+  assert.equal(page.player.y, 0);
+  assert.equal(page.player.velocity, 0);
   page.emit('keyup', key());
+  page.step(10);
+  assert.ok(Number(page.elements.get('distance').textContent) > 0);
+  assert.equal(page.player.y, 0);
+  assert.equal(page.player.velocity, 0);
+  page.emit('keydown', key({ target: page.document.activeElement }));
+  assert.ok(page.player.velocity > 0);
+});
+
+test('non-Space input leaves the start screen idle without preventing default', () => {
+  const page = loadPage();
+  let prevented = 0;
+  page.emit('keydown', key({ code: 'Enter', preventDefault() { prevented++; } }));
+  page.emit('keyup', key({ code: 'Enter' }));
+  page.step(10);
+  assert.equal(prevented, 0);
+  assert.equal(page.elements.get('stage').attributes['data-status'], 'ready');
+  assert.equal(page.elements.get('overlay').hidden, false);
+  assert.equal(page.elements.get('distance').textContent, '000');
+  assert.equal(page.player.y, 0);
+  assert.equal(page.player.velocity, 0);
 });
 
 test('button start, collision feedback and button restart form a complete loop', () => {

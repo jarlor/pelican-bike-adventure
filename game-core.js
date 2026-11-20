@@ -146,7 +146,6 @@
         spaceDown = true;
         if (state.status === 'ready') {
           startGame(state);
-          jump(state);
         } else if (state.status === 'over') {
           startGame(state);
         } else if (state.status === 'paused') {
