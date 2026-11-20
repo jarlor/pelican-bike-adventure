@@ -130,6 +130,72 @@ test('space prevents scrolling, ignores other keys and starts with a jump', () =
   assert.equal(state.player.velocity, Game.PHYSICS.jumpSpeed);
 });
 
+test('a quick Space restart stays grounded until release and a fresh press', () => {
+  const state = running();
+  const controls = Game.createControls(state);
+  advance(state, 1);
+  state.cleared = 3;
+  state.status = 'over';
+  let prevented = 0;
+  assert.equal(controls.keyDown(space({ preventDefault() { prevented++; } })), true);
+  assert.equal(prevented, 1);
+  assert.equal(state.status, 'running');
+  assert.equal(state.distance, 0);
+  assert.equal(state.cleared, 0);
+  assert.equal(state.player.y, 0);
+  assert.equal(state.player.velocity, 0, 'Restart must not also request a jump');
+  // The whole tap can finish before the first frame of the new ride.
+  controls.keyUp(space());
+  advance(state, 0.1);
+  assert.equal(state.player.y, 0);
+  assert.equal(state.player.velocity, 0);
+  assert.equal(controls.keyDown(space()), true);
+  assert.equal(state.player.velocity, Game.PHYSICS.jumpSpeed);
+  advance(state, 0.1);
+  assert.ok(state.player.y > 0);
+});
+
+test('holding restart Space ignores repeat and additional keydowns until Space keyup', () => {
+  const state = running();
+  const controls = Game.createControls(state);
+  advance(state, 3);
+  assert.equal(state.status, 'over');
+  controls.keyDown(space());
+  advance(state, 0.2);
+  const snapshot = JSON.stringify(state);
+  for (const repeat of [true, false]) {
+    assert.equal(controls.keyDown(space({ repeat })), false);
+    assert.equal(JSON.stringify(state), snapshot, 'Held input must neither jump nor reset the ride');
+  }
+  controls.keyUp(space({ code: 'Enter' }));
+  assert.equal(controls.keyDown(space()), false);
+  assert.equal(state.player.y, 0);
+  assert.equal(state.player.velocity, 0);
+  controls.keyUp(space());
+  assert.equal(controls.keyDown(space({ repeat: true })), false);
+  assert.equal(controls.keyDown(space()), true);
+  assert.equal(state.player.velocity, Game.PHYSICS.jumpSpeed);
+});
+
+test('consecutive rides keep restart and jump presses separate', () => {
+  const state = running();
+  const controls = Game.createControls(state);
+  for (let ride = 0; ride < 3; ride++) {
+    advance(state, 3);
+    assert.equal(state.status, 'over');
+    assert.equal(controls.keyDown(space()), true);
+    assert.equal(state.player.y, 0);
+    assert.equal(state.player.velocity, 0);
+    controls.keyUp(space());
+    advance(state, 0.1);
+    assert.equal(controls.keyDown(space()), true);
+    assert.equal(state.player.velocity, Game.PHYSICS.jumpSpeed);
+    controls.keyUp(space());
+    advance(state, 0.1);
+    assert.ok(state.player.y > 0);
+  }
+});
+
 test('holding space cannot auto-jump after landing or reset a finished run', () => {
   const state = running();
   const controls = Game.createControls(state);

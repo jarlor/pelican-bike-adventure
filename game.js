@@ -385,7 +385,7 @@
       title.textContent = '休整一下，再出发。';
       description.textContent = `本次骑行 ${settlement.distance} 米。下一次，试着提前一点起跳。`;
       button.textContent = '再骑一次 ↗';
-      hint.textContent = '动画期间也可按空格重新开始并跳跃';
+      hint.textContent = '空格立即重开，松开后再按跳跃';
       status.textContent = '碰到障碍了 · 随时按空格重开，或选择“再骑一次”';
       stage.setAttribute('aria-label', '游戏结束，按空格重新开始');
     } else if (state.status === 'paused') {

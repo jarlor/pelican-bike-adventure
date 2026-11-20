@@ -144,9 +144,11 @@
         event.preventDefault();
         if (spaceDown || event.repeat) return false;
         spaceDown = true;
-        if (state.status === 'ready' || state.status === 'over') {
+        if (state.status === 'ready') {
           startGame(state);
           jump(state);
+        } else if (state.status === 'over') {
+          startGame(state);
         } else if (state.status === 'paused') {
           resume(state);
         } else {

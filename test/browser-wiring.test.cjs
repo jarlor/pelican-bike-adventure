@@ -36,6 +36,7 @@ function loadPage({ canvasSupported = true, storage = createStorage(), storageAc
   let time = 0;
   let saveDepth = 0;
   let rotations = [];
+  let gameState;
   const motionPreference = { matches: reducedMotion };
   const context = {};
   const drawMethods = ['beginPath', 'closePath', 'save', 'restore', 'fill', 'stroke',
@@ -95,9 +96,18 @@ function loadPage({ canvasSupported = true, storage = createStorage(), storageAc
   for (const [, script] of html.matchAll(/<script src="([^"]+)" defer><\/script>/g)) {
     assert.ok(!script.includes('..') && !script.includes(':'), 'Scripts must be local');
     vm.runInContext(fs.readFileSync(path.join(repository, script), 'utf8'), sandbox, { filename: script });
+    if (script === 'game-core.js') {
+      const Game = sandbox.PelicanGame;
+      // Observe the real instance; keep its input, physics and collision logic intact.
+      sandbox.PelicanGame = { ...Game, createGame() {
+        gameState = Game.createGame();
+        return gameState;
+      } };
+    }
   }
   return {
     elements, document, motionPreference,
+    get player() { return { ...gameState.player }; },
     get rotations() { return rotations.slice(); },
     get drawingCalls() { return drawingCalls; },
     get pendingFrames() { return frames.length; },
@@ -203,44 +213,68 @@ test('collision animates the bird, fades the panel, rolls the score and announce
   assert.equal(storage.writes.length, 1);
 });
 
-for (const [phase, frames] of [['impact', 6], ['fade', 36], ['count', 84], ['ready', 120]]) {
-  test(`space immediately restarts and jumps during ${phase}, leaving no previous animation`, () => {
+for (const reducedMotion of [false, true]) {
+  for (const [phase, frames] of [['impact', 6], ['fade', 36], ['count', 84], ['ready', 120]]) {
+    test(`Space tap restarts without jumping during ${phase} (reduced motion: ${reducedMotion})`, () => {
+      const storage = createStorage();
+      const page = loadPage({ storage, reducedMotion });
+      const get = id => page.elements.get(id);
+      page.click();
+      finishRide(page, 1, { settle: false });
+      page.step(frames);
+      assert.equal(get('stage').attributes['data-settlement'], phase);
+      assert.match(get('start-hint').textContent, /松开后再按跳跃/);
+      assert.equal(storage.values.get(bestScoreKey), '1');
+      const target = page.document.activeElement;
+      assert.equal(target, get(phase === 'impact' ? 'stage' : 'action-button'));
+      let prevented = 0;
+      const drawingBefore = page.drawingCalls;
+      page.emit('keydown', key({ target, preventDefault() { prevented++; } }));
+      assert.equal(prevented, 1, 'Suppress the native Space click on a focused button');
+      assert.ok(page.drawingCalls > drawingBefore, 'Restart paints immediately');
+      assert.equal(get('stage').attributes['data-status'], 'running');
+      assert.equal(get('stage').attributes['data-settlement'], '');
+      assert.equal(get('overlay').hidden, true);
+      assert.equal(get('overlay').style.opacity, '');
+      assert.equal(get('score').textContent, '0');
+      assert.equal(get('distance').textContent, '000');
+      assert.equal(get('cleared').textContent, '00');
+      assert.equal(get('result-announcement').textContent, '');
+      assert.equal(page.document.activeElement, get('stage'));
+      assert.equal(page.player.y, 0);
+      assert.equal(page.player.velocity, 0);
+      // Release before the first new animation frame, reproducing a quick tap.
+      page.emit('keyup', key({ target: page.document.activeElement }));
+      page.step(10);
+      assert.equal(page.player.y, 0);
+      assert.equal(page.player.velocity, 0);
+      assert.deepEqual(page.rotations, []);
+      assert.ok(Number(get('distance').textContent) > 0);
+      assert.equal(get('overlay').hidden, true);
+      assert.equal(storage.writes.length, 1);
+      // Without a fresh jump press, the first obstacle ends the new ride at zero.
+      finishRide(page);
+      assertResults(page, 0, 1);
+      assert.equal(storage.writes.length, 1);
+    });
+  }
+
+  test(`fresh Space presses jump across consecutive restarts (reduced motion: ${reducedMotion})`, () => {
     const storage = createStorage();
-    const page = loadPage({ storage });
-    const get = id => page.elements.get(id);
+    const page = loadPage({ storage, reducedMotion });
     page.click();
     finishRide(page, 1, { settle: false });
-    page.step(frames);
-    assert.equal(get('stage').attributes['data-settlement'], phase);
-    assert.equal(storage.values.get(bestScoreKey), '1');
-    let prevented = 0;
-    const drawingBefore = page.drawingCalls;
-    page.emit('keydown', key({ target: page.document.activeElement,
-      preventDefault() { prevented++; } }));
-    assert.equal(prevented, 1, 'Also suppress the native Space click on a focused button');
-    assert.ok(page.drawingCalls > drawingBefore, 'Restart paints immediately');
-    assert.equal(get('stage').attributes['data-status'], 'running');
-    assert.equal(get('stage').attributes['data-settlement'], '');
-    assert.equal(get('overlay').hidden, true);
-    assert.equal(get('overlay').style.opacity, '');
-    assert.equal(get('score').textContent, '0');
-    assert.equal(get('distance').textContent, '000');
-    assert.equal(get('cleared').textContent, '00');
-    assert.equal(get('result-announcement').textContent, '');
-    assert.equal(page.document.activeElement, get('stage'));
-    page.step(10);
-    assert.deepEqual(page.rotations, []);
-    assert.ok(Number(get('distance').textContent) > 0);
-    assert.equal(get('overlay').hidden, true);
-    assert.equal(storage.writes.length, 1);
-    page.emit('keydown', key({ repeat: true }));
-    page.emit('keydown', key());
-    assert.equal(get('stage').attributes['data-status'], 'running');
-    page.emit('keyup', key());
-    // No additional jump: a Space restart clears the first cone in the real physics.
-    finishRide(page, 1);
-    assertResults(page, 1, 1);
-    assert.equal(storage.writes.length, 1);
+    for (let ride = 0; ride < 3; ride++) {
+      page.emit('keydown', key());
+      page.emit('keyup', key());
+      assert.equal(page.player.velocity, 0);
+      page.step(10);
+      assert.equal(page.player.y, 0);
+      // The helper issues a fresh press at the real first obstacle, then collides with the next.
+      finishRide(page, 1);
+      assertResults(page, 1, 1);
+      assert.equal(storage.writes.length, 1);
+    }
   });
 }
 
@@ -272,6 +306,17 @@ test('holding space through a collision cannot restart until release and a fresh
   page.emit('keydown', key());
   assert.equal(page.elements.get('stage').attributes['data-status'], 'running');
   assert.equal(page.elements.get('overlay').hidden, true);
+  page.step(10);
+  const distance = page.elements.get('distance').textContent;
+  page.emit('keydown', key({ repeat: true }));
+  page.emit('keydown', key());
+  assert.equal(page.elements.get('distance').textContent, distance);
+  page.step(10);
+  assert.equal(page.player.y, 0);
+  assert.equal(page.player.velocity, 0);
+  page.emit('keyup', key());
+  finishRide(page);
+  assertResults(page, 0, 0);
 });
 
 test('Space on the collision frame restarts without waiting for the first animation frame', () => {
@@ -281,10 +326,13 @@ test('Space on the collision frame restarts without waiting for the first animat
   finishRide(page, 1, { settle: false });
   page.emit('keydown', key());
   assert.equal(page.elements.get('stage').attributes['data-status'], 'running');
+  assert.equal(page.player.velocity, 0);
   assert.equal(page.elements.get('overlay').hidden, true);
   assert.deepEqual(storage.writes, [[bestScoreKey, '1']]);
   page.emit('keyup', key());
   page.step(110);
+  assert.equal(page.player.y, 0);
+  assert.equal(page.player.velocity, 0);
   assert.equal(page.elements.get('result-announcement').textContent, '');
 });
 
